@@ -1,0 +1,6 @@
+streamlit
+qiskit>=1.0
+qiskit-ibm-runtime
+matplotlib
+numpy
+# Add other dependencies as needed (e.g., scipy)
