@@ -221,15 +221,21 @@ if run_simulation:
                 st.error(f"Selected backend '{selected_backend}' is not available or configured.")
                 measured_bits_list = None
 
-            # --- Process Results ---
-            # (Code for processing results remains the same)
-            # ... [rest of the try block] ...
+            if measured_bits_list is not None:
+                bob_measured_bits_np = np.array(measured_bits_list, dtype=np.uint8)
+                if -1 in bob_measured_bits_np:
+                     run_container.error("Some measurements failed or returned invalid results. Check logs.")
+                else:
+                    sim_success = True
+                    st.session_state.results['bob_measured_bits_np'] = bob_measured_bits_np
+                    run_container.success(f"Quantum simulation completed on '{selected_backend}'. Bob measured the qubits.")
+            else:
+                run_container.error("Quantum simulation run failed.")
 
         except Exception as e:
-            # Use st.error or run_container.error
-            st.error(f"An error occurred during quantum step: {e}")
+            run_container.error(f"An error occurred during quantum step: {e}")
             import traceback
-            st.error(traceback.format_exc()) # Use st.error for tracebacks usually
+            run_container.error(traceback.format_exc())
 
     # --- Steps 4-7 (Run only if Quantum Step Succeeded) ---
     if sim_success:
@@ -269,6 +275,7 @@ if run_simulation:
                 })
                 res['sifted_df'] = sifted_df
                 run_container.success("Sifting complete.")
+
             else:
                 run_container.warning("No matching bases. Cannot create sifted key.")
                 sifted_len = 0 # Ensure sifted_len is 0 if no matches
@@ -329,13 +336,10 @@ if run_simulation:
             else:
                  run_container.warning("Protocol aborted or no bits remaining. No final key generated.")
 
-            # --- Add Debugging Info ---
-            st.write("DEBUG: Classical processing finished without error.")
-            # --------------------------
-
-            st.session_state.simulation_run_completed = True # Mark run as complete
+            # --- If all above succeed ---
+            st.session_state.simulation_run_completed = True # Set flag on success
             run_container.success("Full simulation cycle finished.")
-            st.balloons()
+            # st.balloons() # Keep commented out for now
 
         except Exception as e:
             # --- Improve Error Reporting ---
@@ -346,9 +350,7 @@ if run_simulation:
             st.session_state.simulation_run_completed = False # Mark as incomplete on error
 
 # --- Display Area (Shows results from session_state if available) ---
-st.write(f"DEBUG: Checking display. Completion flag is: {st.session_state.get('simulation_run_completed', 'Not Set')}") # Add this line
 if st.session_state.simulation_run_completed:
-    st.write("DEBUG: Entering display section.") # Add this line
     st.header("Last Simulation Results")
     res = st.session_state.results
     params = st.session_state.run_params
