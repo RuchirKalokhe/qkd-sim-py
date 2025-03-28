@@ -1,456 +1,620 @@
-# ./app.py
+# ./app.py (Restructured for New Layout - WITH IBM Integration)
 
 import streamlit as st
 import numpy as np
 import pandas as pd
 import time
-import random # For QBER sampling choice
+import random
+import traceback # Added for detailed error logging
 
-# Import Qiskit and Runtime Service
-from qiskit_ibm_runtime import QiskitRuntimeService
-from qiskit import QuantumCircuit # For potential circuit display if needed
+# --- Qiskit/Runtime Imports ---
+# Ensure qiskit-ibm-runtime is installed: pip install qiskit-ibm-runtime
+try:
+    from qiskit_ibm_runtime import QiskitRuntimeService
+    QISKIT_RUNTIME_AVAILABLE = True
+except ImportError:
+    QISKIT_RUNTIME_AVAILABLE = False
+    st.error("`qiskit-ibm-runtime` package not found. Please install it (`pip install qiskit-ibm-runtime`) to use IBM Quantum backends.")
 
-# Import our simulation modules
-from qkd_simulation.protocols import bb84
-from qkd_simulation.quantum import circuits as qkd_circuits
-from qkd_simulation.quantum import runner as qkd_runner
-from qkd_simulation.classical import processing as qkd_processing
-from qkd_simulation.utils import helpers
+from qiskit import QuantumCircuit
 
-# --- Page Configuration ---
+# --- Simulation Module Imports ---
+# Assuming these modules exist in the specified structure
+try:
+    from qkd_simulation.protocols import bb84
+    from qkd_simulation.quantum import circuits as qkd_circuits
+    from qkd_simulation.quantum import runner as qkd_runner
+    from qkd_simulation.classical import processing as qkd_processing
+    from qkd_simulation.utils import helpers
+    SIMULATION_MODULES_AVAILABLE = True
+except ImportError as e:
+    st.error(f"Failed to import simulation modules: {e}. Make sure `qkd_simulation` package is in your Python path.")
+    SIMULATION_MODULES_AVAILABLE = False
+
+# --- Page Config ---
 st.set_page_config(layout="wide", page_title="BB84 QKD Simulator")
 
-# --- Constants for Display ---
+# --- Constants ---
 Z_BASIS_SYM = "▬" # Rectilinear (Z)
 X_BASIS_SYM = "✚" # Diagonal (X)
 BASIS_MAP = {0: Z_BASIS_SYM, 1: X_BASIS_SYM}
-QUBIT_MAP = {
-    (0, 0): "|0⟩", (1, 0): "|1⟩", # Bit, Basis (Z)
-    (0, 1): "|+⟩", (1, 1): "|−⟩"  # Bit, Basis (X)
-}
-QBER_THRESHOLD = 0.15 # Example threshold for aborting protocol
-QBER_SAMPLE_FRACTION = 0.30 # Fixed 30% for QBER check
+QUBIT_MAP_Z = {0: "→ (0)", 1: "↑ (1)"} # Using arrows as described
+QUBIT_MAP_X = {0: "↘ (0)", 1: "↗ (1)"} # Using arrows as described
+QBER_THRESHOLD = 0.15
+QBER_SAMPLE_FRACTION = 0.30
+TARGET_BACKEND = "ibm_brisbane" # Default preferred IBM backend
 
-# --- Initialize Session State ---
-# Store results here to prevent loss on reruns from widget changes (except button)
+# --- Initialize Session State (Essential for complex layouts/interactions) ---
+if 'simulation_started' not in st.session_state:
+    st.session_state.simulation_started = False
 if 'simulation_run_completed' not in st.session_state:
     st.session_state.simulation_run_completed = False
 if 'run_params' not in st.session_state:
     st.session_state.run_params = {}
 if 'results' not in st.session_state:
     st.session_state.results = {}
-
-
-# --- IBM Quantum Service Initialization (runs only once per session unless error) ---
-# Store service in session state to avoid re-initializing unnecessarily
+if 'include_eve' not in st.session_state: # Default for toggle
+    st.session_state.include_eve = False
+# Add state for IBM service and backends
 if 'ibm_service' not in st.session_state:
     st.session_state.ibm_service = None
-    st.session_state.ibm_token_present = False
+if 'available_ibm_backends' not in st.session_state:
     st.session_state.available_ibm_backends = []
+if 'ibm_init_error' not in st.session_state:
     st.session_state.ibm_init_error = None
 
+
+# --- IBM Service Initialization (Attempt only once per session) ---
+# Moved this section higher up to ensure it runs before UI elements needing it
+if QISKIT_RUNTIME_AVAILABLE and st.session_state.ibm_service is None and st.session_state.ibm_init_error is None:
     try:
-        if 'IBM_QUANTUM_TOKEN' in st.secrets:
-            api_token = st.secrets["IBM_QUANTUM_TOKEN"]
-            if api_token and api_token != "YOUR_API_TOKEN_HERE":
-                try:
-                    service_instance = QiskitRuntimeService(channel="ibm_quantum", token=api_token)
-                    # Attempt to list backends as verification
-                    all_backends = service_instance.backends()
-
-                    st.session_state.ibm_service = service_instance
-                    st.session_state.ibm_token_present = True
-                    st.session_state.available_ibm_backends = [
-                        b.name for b in all_backends
-                        if b.status().operational and ("simulator" in b.name or b.num_qubits >= 1)
-                    ]
-                    simulators = [b for b in st.session_state.available_ibm_backends if "simulator" in b]
-                    real_devices = sorted([b for b in st.session_state.available_ibm_backends if "simulator" not in b])
-                    st.session_state.available_ibm_backends = sorted(simulators) + real_devices
-                    st.sidebar.success("IBM Quantum Service Initialized.")
-
-                except Exception as e:
-                    st.session_state.ibm_init_error = f"IBM Service Error: {e}"
-                    st.sidebar.error(st.session_state.ibm_init_error)
-            else:
-                st.sidebar.warning("IBM_QUANTUM_TOKEN found but seems invalid/placeholder.")
+        # Check if the secret exists and is not empty
+        if "IBM_QUANTUM_TOKEN" in st.secrets and st.secrets["IBM_QUANTUM_TOKEN"]:
+            token = st.secrets["IBM_QUANTUM_TOKEN"]
+            # Attempt to initialize the service
+            # Use channel='ibm_quantum', instance might be needed for specific plans
+            st.session_state.ibm_service = QiskitRuntimeService(channel="ibm_quantum", token=token)
+            # Fetch backends ONLY if service initialized successfully
+            # Filter for operational, non-simulator quantum devices
+            backends = st.session_state.ibm_service.backends(simulator=False, operational=True)
+            st.session_state.available_ibm_backends = sorted([b.name for b in backends])
+            st.sidebar.success("✅ IBM Quantum Service Initialized.") # Feedback in sidebar
+            st.session_state.ibm_init_error = False # Mark successful init
+        elif "IBM_QUANTUM_TOKEN" in st.secrets:
+             st.session_state.ibm_init_error = "IBM_QUANTUM_TOKEN found in secrets but is empty."
         else:
-            st.sidebar.warning("IBM_QUANTUM_TOKEN not found in secrets. IBM execution disabled.")
-    except KeyError:
-        st.sidebar.warning("Streamlit secrets not configured locally or `IBM_QUANTUM_TOKEN` missing. IBM execution disabled.")
+            st.session_state.ibm_init_error = "IBM_QUANTUM_TOKEN not found in Streamlit secrets (.streamlit/secrets.toml)."
+
     except Exception as e:
-        st.session_state.ibm_init_error = f"Error initializing IBM Service: {e}"
-        st.sidebar.error(st.session_state.ibm_init_error)
+        st.session_state.ibm_init_error = f"Failed to initialize IBM Quantum Service: {e}"
+        st.session_state.ibm_service = None # Ensure service is None on error
+        st.session_state.available_ibm_backends = []
 
-# Retrieve from session state for use in UI
-service = st.session_state.ibm_service
-available_ibm_backends = st.session_state.available_ibm_backends
+# Display error message prominently if initialization failed
+if st.session_state.ibm_init_error and isinstance(st.session_state.ibm_init_error, str):
+    st.sidebar.warning(f"⚠️ IBM Quantum Integration Issue: {st.session_state.ibm_init_error}")
 
-# Check if target backend is available
-TARGET_BACKEND = "ibm_brisbane"
+# Retrieve from session state for use later in the script
+service = st.session_state.get('ibm_service', None)
+available_ibm_backends = st.session_state.get('available_ibm_backends', [])
 target_backend_available = TARGET_BACKEND in available_ibm_backends
-if service and not target_backend_available:
-    st.sidebar.warning(f"Target backend '{TARGET_BACKEND}' is not currently available or operational.")
 
-
-# --- Streamlit UI ---
-st.title("BB84 Quantum Key Distribution (QKD) Simulator")
-st.markdown("""
-Simulate the BB84 protocol between Alice and Bob, optionally with an eavesdropper (Eve).
-Choose parameters, run the simulation locally or on IBM Quantum, and observe the results.
-**Note:** Changing parameters requires pressing "Run Simulation" again.
-""")
-
-# --- Sidebar Inputs ---
-st.sidebar.header("Simulation Parameters")
-num_bits = st.sidebar.number_input("Number of Qubits (Bits for Key):", min_value=4, max_value=100, value=20, step=4, key="num_bits_input")
-
-include_eve = st.sidebar.checkbox("Include Eavesdropper (Eve)?", key="include_eve_input")
-eve_strategy = "Intercept-Resend (Random Basis) - Conceptual" # Updated description
-
-backend_options = ["Local Simulator (qiskit-aer)"]
-if service and available_ibm_backends:
-    # Ensure target backend is listed if available
-    if target_backend_available and TARGET_BACKEND not in backend_options:
-         backend_options.append(TARGET_BACKEND)
-    # Add other available backends, avoiding duplicates
-    other_backends = [b for b in available_ibm_backends if b != TARGET_BACKEND]
-    backend_options.extend(other_backends)
-
-# Set default index for backend selection
-default_backend_index = 0
-if target_backend_available:
-    try:
-        default_backend_index = backend_options.index(TARGET_BACKEND)
-    except ValueError:
-        default_backend_index = 0 # Fallback to local if target not found unexpectedly
-
-selected_backend = st.sidebar.selectbox(
-    "Select Execution Backend:",
-    backend_options,
-    index=default_backend_index, # Default to target or local
-    key="selected_backend_input"
-)
-
-shots = 1 # For QKD, each qubit transmission is unique, so 1 shot per circuit.
-
-run_simulation = st.button("Run QKD Simulation")
-
-st.sidebar.markdown("---")
-st.sidebar.markdown(f"**Basis Legend:** {Z_BASIS_SYM} = Z (Rectilinear), {X_BASIS_SYM} = X (Diagonal)")
-st.sidebar.markdown(f"**Qubit Legend:** |0⟩, |1⟩ (Z-basis); |+⟩, |−⟩ (X-basis)")
-st.sidebar.markdown(f"**QBER Check:** Fixed at {QBER_SAMPLE_FRACTION*100:.0f}% of sifted key.")
-
-
-# --- Simulation Logic (Runs ONLY when button is pressed) ---
-if run_simulation:
-    st.session_state.simulation_run_completed = False # Reset flag
-    st.session_state.results = {} # Clear previous results
-    st.session_state.run_params = { # Store params used for this run
-        'num_bits': num_bits,
-        'include_eve': include_eve,
-        'selected_backend': selected_backend,
-        'target_backend': TARGET_BACKEND if selected_backend == TARGET_BACKEND else None
+# --- Custom CSS Injection ---
+# (CSS remains the same as provided)
+css = """
+<style>
+    /* General Styling */
+    .stApp {
+        /* background-color: #f0f2f6; /* Light background */
     }
 
-    run_container = st.container() # Use a container for output of this run
-    run_container.header("Simulation Run")
+    /* Header Area */
+    .header-container {
+        display: flex;
+        justify-content: space-between;
+        align-items: center; /* Vertically align items */
+        padding-bottom: 1rem; /* Add some space below header */
+        border-bottom: 1px solid #ddd; /* Separator line */
+        margin-bottom: 1rem;
+    }
+    .header-container .title-subtitle {
+        flex-grow: 1; /* Allow title to take available space */
+    }
+    .header-container .controls {
+        display: flex;
+        align-items: center;
+        gap: 1rem; /* Space between controls */
+    }
 
-    # --- Step 1: Alice ---
-    run_container.subheader("1. Alice Prepares Qubits")
-    alice_bits, alice_bases = bb84.generate_bits_and_bases(num_bits)
-    alice_states = [QUBIT_MAP[(bit, basis)] for bit, basis in zip(alice_bits, alice_bases)]
-    alice_basis_syms = [BASIS_MAP[b] for b in alice_bases]
-    alice_df = pd.DataFrame({
-        'Index': range(num_bits), 'Alice Bit': alice_bits,
-        'Alice Basis': alice_basis_syms, 'Sent State': alice_states
-    })
-    st.session_state.results['alice_df'] = alice_df
-    st.session_state.results['alice_bits'] = alice_bits # Need for later
-    st.session_state.results['alice_bases'] = alice_bases # Need for later
-    run_container.success(f"Alice generated {num_bits} random bits and bases.")
+    /* Custom Button Styling */
+    .stButton>button {
+        border-radius: 20px; /* More rounded */
+        padding: 0.5rem 1rem;
+        /* Add hover effects etc. */
+    }
 
-    # --- Step 1.5: Eve (Conceptual) ---
-    eve_bases = None
-    if include_eve:
-        run_container.subheader("1.5. Eve Intercepts & Measures (!)")
-        run_container.warning(f"Eve intercepts using strategy: **{eve_strategy}**")
-        eve_bases = bb84.generate_bases(num_bits)
-        eve_basis_syms = [BASIS_MAP[b] for b in eve_bases]
-        eve_df = pd.DataFrame({
-            'Index': range(num_bits), 'Alice Sent State': alice_states,
-            'Eve Measure Basis': eve_basis_syms
-        })
-        st.session_state.results['eve_df'] = eve_df
-        run_container.markdown("_**Conceptual:** Eve measures, potentially disturbing the state. This simulation **does not** modify the circuits passed to the backend based on Eve's actions. Her impact is primarily seen in increased QBER on noisy backends._")
+    /* Custom Toggle Styling (May need adjustment based on Streamlit version) */
+    .stToggle label {
+        /* Style label if needed */
+    }
 
-    # --- Step 2: Bob Bases ---
-    run_container.subheader("2. Bob Chooses Measurement Bases")
-    bob_bases = bb84.generate_bases(num_bits)
-    bob_basis_syms = [BASIS_MAP[b] for b in bob_bases]
-    bob_bases_df = pd.DataFrame({'Index': range(num_bits), 'Bob Measure Basis': bob_basis_syms})
-    st.session_state.results['bob_bases_df'] = bob_bases_df
-    st.session_state.results['bob_bases'] = bob_bases # Need for later
-    run_container.success(f"Bob randomly chose {num_bits} measurement bases.")
+    /* Basis Representation */
+    .basis-section {
+        border: 1px solid #eee;
+        padding: 1rem;
+        border-radius: 8px;
+        text-align: center;
+        background-color: white;
+    }
+    .basis-section h5 { /* Target subheader within section */
+        margin-bottom: 1rem;
+    }
+    .basis-section p {
+        font-size: 1.2rem; /* Larger symbols */
+        margin: 0.5rem 0;
+    }
 
-    # --- Step 3: Quantum Transmission ---
-    run_container.subheader("3. Quantum Transmission & Measurement")
-    bob_measured_bits_np = None
-    sim_success = False
-    # CORRECTED LINE: Use st.spinner directly
-    with st.spinner("Preparing and running quantum circuits..."):
-        try:
-            qkd_circs = qkd_circuits.create_bb84_circuits(alice_bits, alice_bases, bob_bases)
-            st.session_state.results['sample_circuit_0'] = qkd_circs[0].draw(output='text') if qkd_circs else None
+    /* Table Styling */
+    .stDataFrame { /* Target the container */
+       /* width: 100%; */
+    }
+     .stDataFrame table { /* Target the actual table */
+        /* width: 100%; */
+        /* border-collapse: collapse; */ /* Ensure borders connect */
+    }
+    .stDataFrame th {
+        background-color: #f8f9fa; /* Light header background */
+        border-bottom: 2px solid #dee2e6;
+        text-align: left;
+        padding: 8px;
+    }
+    .stDataFrame td {
+        border: 1px solid #dee2e6;
+        padding: 8px;
+        text-align: left;
+    }
+    /* Optional: Alternating row colors */
+    /* .stDataFrame tbody tr:nth-child(even) {
+        background-color: #f2f2f2;
+    } */
 
-            # --- Select and Run Backend ---
-            # (Code for selecting local vs IBM remains the same)
-            if selected_backend == "Local Simulator (qiskit-aer)":
-                # Use run_container inside the runner if you want messages there,
-                # OR keep using st.info/error/etc. - they will appear in run_container anyway.
-                measured_bits_list = qkd_runner.run_circuits_local_simulator(qkd_circs, shots=shots)
-            elif service and selected_backend in available_ibm_backends:
-                if service:
-                     measured_bits_list = qkd_runner.run_circuits_ibm_runtime(service, selected_backend, qkd_circs, shots=shots)
-                else:
-                     # Use run_container.error if you want error specifically inside container
-                     # Or just st.error - it will appear in the container context
-                     st.error("IBM Service not initialized. Cannot run on IBM backend.")
-                     measured_bits_list = None
-            else:
-                st.error(f"Selected backend '{selected_backend}' is not available or configured.")
-                measured_bits_list = None
-
-            if measured_bits_list is not None:
-                bob_measured_bits_np = np.array(measured_bits_list, dtype=np.uint8)
-                if -1 in bob_measured_bits_np:
-                     run_container.error("Some measurements failed or returned invalid results. Check logs.")
-                else:
-                    sim_success = True
-                    st.session_state.results['bob_measured_bits_np'] = bob_measured_bits_np
-                    run_container.success(f"Quantum simulation completed on '{selected_backend}'. Bob measured the qubits.")
-            else:
-                run_container.error("Quantum simulation run failed.")
-
-        except Exception as e:
-            run_container.error(f"An error occurred during quantum step: {e}")
-            import traceback
-            run_container.error(traceback.format_exc())
-
-    # --- Steps 4-7 (Run only if Quantum Step Succeeded) ---
-    if sim_success:
-        try:
-            # --- Step 4: Basis Comparison ---
-            run_container.subheader("4. Public Discussion: Basis Comparison")
-            res = st.session_state.results # Shortcut
-            matching_indices, mismatching_indices = bb84.compare_bases(res['alice_bases'], res['bob_bases'])
-            res['matching_indices'] = matching_indices
-            res['mismatching_indices'] = mismatching_indices
-            num_matches = len(matching_indices)
-            num_mismatches = len(mismatching_indices)
-            run_container.write(f"- Bases matched at **{num_matches}** positions.")
-            run_container.write(f"- Bases mismatched at **{num_mismatches}** positions.")
-            compare_df = pd.DataFrame({
-                'Index': range(num_bits),
-                'Alice Basis': [BASIS_MAP[b] for b in res['alice_bases']],
-                'Bob Basis': [BASIS_MAP[b] for b in res['bob_bases']],
-                'Match?': ['✅ Yes' if i in matching_indices else '❌ No' for i in range(num_bits)]
-            })
-            res['compare_df'] = compare_df
-            run_container.success("Basis comparison complete.")
-
-            # --- Step 5: Sifting ---
-            run_container.subheader("5. Sifting the Key")
-            if num_matches > 0:
-                alice_sifted_key, bob_sifted_key = qkd_processing.sift_key(res['alice_bits'], res['bob_measured_bits_np'], matching_indices)
-                sifted_len = len(alice_sifted_key)
-                res['alice_sifted_key'] = alice_sifted_key
-                res['bob_sifted_key'] = bob_sifted_key
-                res['sifted_len'] = sifted_len
-                run_container.write(f"Length of sifted key: **{sifted_len} bits**")
-                sifted_df = pd.DataFrame({
-                    'Sifted Index': range(sifted_len), 'Original Index': matching_indices,
-                    'Alice Bit': alice_sifted_key, 'Bob Bit': bob_sifted_key,
-                    'Agree?': ['✅ Yes' if a == b else '❌ NO!' for a,b in zip(alice_sifted_key, bob_sifted_key)]
-                })
-                res['sifted_df'] = sifted_df
-                run_container.success("Sifting complete.")
-
-            else:
-                run_container.warning("No matching bases. Cannot create sifted key.")
-                sifted_len = 0 # Ensure sifted_len is 0 if no matches
-                res['sifted_len'] = 0
-
-            # --- Step 6: QBER Estimation ---
-            run_container.subheader("6. Estimate QBER")
-            if sifted_len > 0:
-                qber, qber_indices, remaining_indices = qkd_processing.estimate_qber(
-                    res['alice_sifted_key'], res['bob_sifted_key'], sample_fraction=QBER_SAMPLE_FRACTION
-                )
-                num_qber_bits = len(qber_indices)
-                num_final_bits = len(remaining_indices)
-                res['qber'] = qber
-                res['qber_indices'] = qber_indices
-                res['remaining_indices'] = remaining_indices
-                res['num_qber_bits'] = num_qber_bits
-                res['num_final_bits'] = num_final_bits
-
-                run_container.metric(label="Estimated QBER", value=f"{qber:.2%}")
-                qber_details_df = pd.DataFrame({
-                     'Sifted Index (for QBER)': qber_indices,
-                     'Alice Bit': res['alice_sifted_key'][qber_indices],
-                     'Bob Bit': res['bob_sifted_key'][qber_indices],
-                     'Match?': ['✅ Yes' if a == b else '❌ ERROR' for a,b in zip(res['alice_sifted_key'][qber_indices], res['bob_sifted_key'][qber_indices])]
-                })
-                res['qber_details_df'] = qber_details_df
-
-                # Explain potential 0% QBER
-                if qber == 0.0 and not include_eve and "simulator" in selected_backend.lower():
-                     run_container.info("QBER is 0%. This is expected for a noiseless simulation without an active eavesdropper modifying the qubits.")
-                elif qber == 0.0 and include_eve and "simulator" in selected_backend.lower():
-                     run_container.warning("QBER is 0% despite Eve being 'included'. This is because this simulation **does not modify the quantum circuits** based on Eve's actions. Run on real hardware or a noisy simulator to see Eve's impact via increased QBER.")
-                elif qber > 0.0:
-                     run_container.info(f"QBER is {qber:.2%}. This indicates noise in the channel or potential eavesdropping.")
+</style>
+"""
+st.markdown(css, unsafe_allow_html=True)
 
 
-                if qber > QBER_THRESHOLD:
-                    run_container.error(f"QBER ({qber:.2%}) > Threshold ({QBER_THRESHOLD:.2%}). **Protocol Aborted.**")
-                    res['protocol_aborted'] = True
-                else:
-                    run_container.success(f"QBER ({qber:.2%}) is acceptable.")
-                    res['protocol_aborted'] = False
-            else:
-                run_container.warning("Sifted key empty. Cannot estimate QBER.")
-                res['qber'] = None
-                res['protocol_aborted'] = True # Treat as aborted if no key
+# --- Header Section ---
+# Use columns for layout, but apply flexbox via CSS container for better control
+st.markdown('<div class="header-container">', unsafe_allow_html=True) # Start CSS container
 
-            # --- Step 7: Final Key ---
-            run_container.subheader("7. Final Shared Secret Key")
-            if not res.get('protocol_aborted', True) and res.get('num_final_bits', 0) > 0:
-                final_key_alice = qkd_processing.extract_final_key(res['alice_sifted_key'], res['remaining_indices'])
-                final_key_bob = qkd_processing.extract_final_key(res['bob_sifted_key'], res['remaining_indices'])
-                res['final_key_alice_str'] = helpers.bits_to_string(final_key_alice)
-                res['final_key_bob_str'] = helpers.bits_to_string(final_key_bob)
-                res['final_keys_match'] = np.array_equal(final_key_alice, final_key_bob)
-                run_container.write(f"Final Key Length: **{res['num_final_bits']} bits**")
-            else:
-                 run_container.warning("Protocol aborted or no bits remaining. No final key generated.")
+# Column 1: Title and Subtitle
+st.markdown('<div class="title-subtitle">', unsafe_allow_html=True)
+st.title("BB84 Quantum Key Distribution")
+st.subheader("Quantum State Transmission")
+st.markdown('</div>', unsafe_allow_html=True)
 
-            # --- If all above succeed ---
-            st.session_state.simulation_run_completed = True # Set flag on success
-            run_container.success("Full simulation cycle finished.")
-            # st.balloons() # Keep commented out for now
+# Column 2: Controls (Toggle and Button)
+st.markdown('<div class="controls">', unsafe_allow_html=True)
+# Use st.session_state for toggle value persistence
+eve_toggle = st.toggle("Include Eve (Intercept-Resend)", value=st.session_state.include_eve, key="eve_toggle_widget", help="Simulates Eve's intercept-resend attack by introducing errors when using the **Local Simulator**. Does not affect real hardware runs.")
+st.session_state.include_eve = eve_toggle # Update state when toggle changes
 
-        except Exception as e:
-            # --- Improve Error Reporting ---
-            st.error(f"ERROR during classical post-processing (Steps 4-7): {e}")
-            import traceback
-            st.error(traceback.format_exc()) # Ensure full traceback is shown
-            # -----------------------------
-            st.session_state.simulation_run_completed = False # Mark as incomplete on error
+# Start Simulation Button
+start_simulation_pressed = st.button("Start Simulation", disabled=not SIMULATION_MODULES_AVAILABLE) # Disable if modules failed
+st.markdown('</div>', unsafe_allow_html=True)
 
-# --- Display Area (Shows results from session_state if available) ---
-if st.session_state.simulation_run_completed:
-    st.header("Last Simulation Results")
-    res = st.session_state.results
-    params = st.session_state.run_params
-    st.info(f"Showing results for run with: {params['num_bits']} bits, Eve included: {params['include_eve']}, Backend: '{params['selected_backend']}'")
-
-    # Display Step 1
-    st.subheader("1. Alice's Preparation")
-    if 'alice_df' in res:
-        with st.expander("Details", expanded=False):
-            st.dataframe(res['alice_df'], use_container_width=True)
-
-    # Display Step 1.5
-    if 'eve_df' in res:
-        st.subheader("1.5. Eve's Actions (Conceptual)")
-        with st.expander("Details", expanded=False):
-            st.dataframe(res['eve_df'], use_container_width=True)
-            st.markdown("_**Conceptual:** Eve measures, potentially disturbing the state. This simulation **does not** modify the circuits passed to the backend based on Eve's actions. Her impact is primarily seen in increased QBER on noisy backends._")
-
-    # Display Step 2
-    st.subheader("2. Bob's Basis Choices")
-    if 'bob_bases_df' in res:
-         with st.expander("Details", expanded=False):
-            st.dataframe(res['bob_bases_df'], use_container_width=True)
-
-    # Display Step 3
-    st.subheader("3. Quantum Transmission & Measurement")
-    if 'bob_measured_bits_np' in res:
-         bob_res_df = pd.DataFrame({
-             'Index': range(params['num_bits']),
-             'Bob Measure Basis': [BASIS_MAP[b] for b in res['bob_bases']],
-             'Bob Measured Bit': res['bob_measured_bits_np']
-         })
-         with st.expander("Bob's Measurement Results", expanded=False):
-             st.dataframe(bob_res_df, use_container_width=True)
-    if 'sample_circuit_0' in res and res['sample_circuit_0']:
-         with st.expander("Sample Quantum Circuit (Qubit 0)", expanded=False):
-            st.code(res['sample_circuit_0'], language='text')
-
-    # Display Step 4
-    st.subheader("4. Basis Comparison")
-    if 'compare_df' in res:
-        st.write(f"- Bases matched at **{len(res.get('matching_indices',[]))}** positions.")
-        st.write(f"- Bases mismatched at **{len(res.get('mismatching_indices',[]))}** positions.")
-        with st.expander("Details", expanded=False):
-            st.dataframe(res['compare_df'], use_container_width=True)
-
-    # Display Step 5
-    st.subheader("5. Sifted Key")
-    if 'sifted_df' in res:
-        st.write(f"Length of sifted key: **{res.get('sifted_len', 0)} bits**")
-        with st.expander("Details", expanded=False):
-            st.dataframe(res['sifted_df'], use_container_width=True)
-            st.markdown("_Disagreements here indicate errors (noise or Eve!)._")
-    elif 'sifted_len' in res and res['sifted_len'] == 0:
-         st.warning("No matching bases found. Sifted key is empty.")
+st.markdown('</div>', unsafe_allow_html=True) # End CSS container
 
 
-    # Display Step 6
-    st.subheader("6. QBER Estimation")
-    if 'qber' in res and res['qber'] is not None:
-        st.metric(label="Estimated QBER", value=f"{res['qber']:.2%}")
-        if 'qber_details_df' in res:
-            with st.expander(f"QBER Sample Details ({res.get('num_qber_bits', 0)} bits)", expanded=False):
-                 st.dataframe(res['qber_details_df'], use_container_width=True)
+# --- Main Content Area with Tabs ---
+tab1, tab2 = st.tabs(["**Visualization**", "**Statistics**"])
 
-        # Repeat QBER explanation
-        if res['qber'] == 0.0 and not params['include_eve'] and "simulator" in params['selected_backend'].lower():
-             st.info("QBER is 0%. Expected for noiseless simulation without active eavesdropping.")
-        elif res['qber'] == 0.0 and params['include_eve'] and "simulator" in params['selected_backend'].lower():
-             st.warning("QBER is 0% despite Eve being 'included', as this simulation doesn't modify quantum circuits for Eve's actions.")
-        elif res['qber'] > 0.0:
-             st.info(f"QBER is {res['qber']:.2%}. Indicates noise or potential eavesdropping.")
+with tab1:
+    if not SIMULATION_MODULES_AVAILABLE:
+        st.error("Cannot proceed with simulation visualization as core modules failed to load.")
+    else:
+        st.header("Simulation Steps & Results")
 
-        if res.get('protocol_aborted', False):
-            st.error(f"QBER ({res['qber']:.2%}) likely exceeded threshold ({QBER_THRESHOLD:.2%}). **Protocol Aborted.**")
-        else:
-            st.success(f"QBER ({res['qber']:.2%}) is acceptable.")
-
-    elif 'sifted_len' in res and res['sifted_len'] == 0:
-         st.warning("Sifted key empty. Cannot estimate QBER.")
-
-    # Display Step 7
-    st.subheader("7. Final Shared Secret Key")
-    if not res.get('protocol_aborted', True) and 'final_key_alice_str' in res:
-        st.write(f"Final Key Length: **{res.get('num_final_bits', 0)} bits**")
+        # --- Basis Representation (Revised) ---
+        st.subheader("Photon Basis Representation")
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown("**Alice's Final Key:**")
-            st.code(res['final_key_alice_str'], language='text')
+            with st.container(border=True):
+                 st.subheader("Rectilinear Basis (Z)")
+                 st.markdown(f"<p style='font-size: 1.2rem; text-align: center; margin: 0.5rem 0;'>{QUBIT_MAP_Z[0]} (Bit 0)</p>", unsafe_allow_html=True)
+                 st.markdown(f"<p style='font-size: 1.2rem; text-align: center; margin: 0.5rem 0;'>{QUBIT_MAP_Z[1]} (Bit 1)</p>", unsafe_allow_html=True)
+                 st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True) # Spacer
+
         with col2:
-            st.markdown("**Bob's Final Key:**")
-            st.code(res['final_key_bob_str'], language='text')
+             with st.container(border=True):
+                 st.subheader("Diagonal Basis (X)")
+                 st.markdown(f"<p style='font-size: 1.2rem; text-align: center; margin: 0.5rem 0;'>{QUBIT_MAP_X[0]} (Bit 0)</p>", unsafe_allow_html=True)
+                 st.markdown(f"<p style='font-size: 1.2rem; text-align: center; margin: 0.5rem 0;'>{QUBIT_MAP_X[1]} (Bit 1)</p>", unsafe_allow_html=True)
+                 st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True) # Spacer
 
-        if res.get('final_keys_match', False):
-            st.success("✅ Alice's and Bob's final keys match!")
+        st.markdown("---") # Separator
+
+        # --- Simulation Execution and Display Area ---
+        st.markdown("#### Configuration")
+        num_bits = st.number_input("Number of Qubits:", min_value=4, max_value=100, value=20, step=4, key="num_bits_main")
+
+        # --- Backend Selection Dropdown ---
+        # Start with local simulator
+        backend_options_main = ["Local Simulator (qiskit-aer)"]
+        # Add IBM backends if service is initialized and backends are available
+        if service and available_ibm_backends:
+            # Add the target backend first if available
+            if target_backend_available and TARGET_BACKEND not in backend_options_main:
+                 backend_options_main.append(TARGET_BACKEND)
+            # Add other available IBM backends, excluding the target if already added
+            other_ibm_backends = [b for b in available_ibm_backends if b != TARGET_BACKEND]
+            backend_options_main.extend(other_ibm_backends)
+
+        # Determine default index (prefer target IBM backend if available, else local)
+        default_backend_index_main = 0
+        if target_backend_available:
+            try:
+                # Find the index of the target backend in the combined list
+                default_backend_index_main = backend_options_main.index(TARGET_BACKEND)
+            except ValueError:
+                pass # Should not happen if target_backend_available is True, but safety first
+
+        selected_backend_main = st.selectbox(
+            "Execution Backend:",
+            backend_options_main,
+            index=default_backend_index_main,
+            key="selected_backend_main",
+            help="Select 'Local Simulator' for fast, noiseless runs or an IBM Quantum backend (requires API token in secrets) for real hardware execution."
+        )
+
+        # --- Run Simulation Logic (Triggered by Button) ---
+        if start_simulation_pressed:
+            st.session_state.simulation_started = True
+            st.session_state.simulation_run_completed = False
+            st.session_state.results = {} # Clear previous results
+            st.session_state.run_params = {
+                'num_bits': num_bits,
+                'include_eve': st.session_state.include_eve, # Get from state
+                'selected_backend': selected_backend_main,
+            }
+
+            st.markdown("---")
+            st.subheader("Running Simulation...")
+            progress_bar = st.progress(0, text="Starting...")
+            eve_simulation_active = False # Flag to track if Eve simulation was performed
+
+            try:
+                    # Step 1: Alice
+                    progress_bar.progress(5, text="Step 1/7: Alice generating bits and bases...")
+                    alice_bits, alice_bases = bb84.generate_bits_and_bases(num_bits)
+                    st.session_state.results['alice_bits'] = alice_bits
+                    st.session_state.results['alice_bases'] = alice_bases
+
+                    # Step 2: Bob Bases
+                    progress_bar.progress(10, text="Step 2/7: Bob choosing bases...")
+                    bob_bases = bb84.generate_bases(num_bits)
+                    st.session_state.results['bob_bases'] = bob_bases
+
+                    # Step 3: Quantum Run
+                    progress_bar.progress(20, text="Step 3/7: Preparing quantum circuits...")
+                    qkd_circs = qkd_circuits.create_bb84_circuits(alice_bits, alice_bases, bob_bases)
+
+                    measured_bits_list = None
+                    run_start_time = time.time()
+                    is_local_simulator = selected_backend_main == "Local Simulator (qiskit-aer)"
+                    spinner_text = f"Step 3/7: Running {len(qkd_circs)} circuits on {selected_backend_main}..."
+                    if is_local_simulator and st.session_state.include_eve:
+                        spinner_text += " (Simulating Eve's Interception)"
+
+                    with st.spinner(spinner_text):
+                        if is_local_simulator:
+                            measured_bits_list = qkd_runner.run_circuits_local_simulator(qkd_circs, shots=1)
+
+                            # *** EVE INTERCEPTION SIMULATION (Local Simulator Only) ***
+                            if st.session_state.include_eve and measured_bits_list is not None:
+                                eve_simulation_active = True
+                                progress_bar.progress(50, text="Step 3/7: Simulating Eve's measurements...")
+                                # Eve randomly chooses bases
+                                eve_bases = bb84.generate_bases(num_bits)
+                                st.session_state.results['eve_bases'] = eve_bases # Store Eve's bases
+
+                                bob_measured_bits_potentially_altered = np.array(measured_bits_list, dtype=np.uint8)
+
+                                bits_flipped_by_eve = 0
+                                for i in range(num_bits):
+                                    # If Eve's basis differs from Alice's preparation basis...
+                                    if alice_bases[i] != eve_bases[i]:
+                                        # ...there's a 50% chance the state Bob receives is effectively
+                                        # orthogonal to Alice's original state in Alice's basis,
+                                        # leading to a 50% chance Bob measures the wrong bit
+                                        # *if* Bob uses Alice's original basis.
+                                        # We simulate this potential error directly on Bob's measurement result.
+                                        if random.random() < 0.5:
+                                            # Flip Bob's measured bit for this position
+                                            original_bit = bob_measured_bits_potentially_altered[i]
+                                            bob_measured_bits_potentially_altered[i] = 1 - original_bit
+                                            bits_flipped_by_eve += 1
+
+                                # Use the potentially altered bits as Bob's results
+                                measured_bits_list = bob_measured_bits_potentially_altered.tolist()
+                                st.info(f"🕵️ Eve simulation active: Intercepted {num_bits} qubits. Introduced approx. {bits_flipped_by_eve} errors due to basis mismatches.")
+                            # *** END EVE SIMULATION ***
+
+                        elif service and selected_backend_main in available_ibm_backends:
+                            # Ensure the service object is valid before using
+                            if st.session_state.ibm_service:
+                                measured_bits_list = qkd_runner.run_circuits_ibm_runtime(st.session_state.ibm_service, selected_backend_main, qkd_circs, shots=1)
+                                if st.session_state.include_eve:
+                                    st.warning(f"⚠️ 'Include Eve' is checked, but backend is '{selected_backend_main}'. Active Eve interception is only simulated on the 'Local Simulator'. Results reflect hardware noise, not simulated eavesdropping.")
+                            else:
+                                st.error("IBM Service object is not available. Cannot run on IBM backend.")
+                        else:
+                            st.error(f"Selected backend '{selected_backend_main}' is not configured or available.")
+
+                    run_duration = time.time() - run_start_time
+                    progress_text = f"Step 3/7: Quantum run finished ({run_duration:.2f}s)."
+                    if eve_simulation_active:
+                        progress_text += " Eve simulation applied."
+                    progress_bar.progress(60, text=progress_text)
+
+
+                    if measured_bits_list is not None:
+                        # Use the final list (potentially altered by Eve sim)
+                        bob_measured_bits_np = np.array(measured_bits_list, dtype=np.uint8)
+                        st.session_state.results['bob_measured_bits_np'] = bob_measured_bits_np
+                    else:
+                        raise ValueError("Quantum simulation or execution failed to return results.")
+
+                    # --- Steps 4-7: Classical Processing (using potentially Eve-altered Bob bits) ---
+                    progress_bar.progress(70, text="Step 4/7: Comparing bases (Alice/Bob)...")
+                    matching_indices, _ = bb84.compare_bases(alice_bases, bob_bases)
+                    st.session_state.results['matching_indices'] = matching_indices
+
+                    progress_bar.progress(80, text="Step 5/7: Sifting keys...")
+                    # Sifting uses Alice's original bits and Bob's (potentially altered) measured bits
+                    alice_sifted, bob_sifted = qkd_processing.sift_key(alice_bits, bob_measured_bits_np, matching_indices)
+                    st.session_state.results['alice_sifted'] = alice_sifted
+                    st.session_state.results['bob_sifted'] = bob_sifted # This now contains Eve's potential errors
+
+                    progress_bar.progress(90, text="Step 6/7: Estimating QBER...")
+                    if len(alice_sifted) > 1: # Need at least 2 bits to estimate QBER
+                        # QBER calculation will now compare Alice's sifted key with Bob's potentially error-containing sifted key
+                        qber, qber_idx, remain_idx = qkd_processing.estimate_qber(alice_sifted, bob_sifted, QBER_SAMPLE_FRACTION)
+                        st.session_state.results['qber'] = qber
+                        st.session_state.results['qber_indices_in_sifted'] = qber_idx
+                        st.session_state.results['remaining_indices_in_sifted'] = remain_idx
+                        st.info(f"Step 6: QBER Estimated: {qber:.2%}") # Show QBER info message
+                    else:
+                        st.warning("Not enough sifted bits to estimate QBER. Skipping QBER estimation and final key extraction.")
+                        qber = None
+                        remain_idx = []
+                        st.session_state.results['qber'] = None
+                        st.session_state.results['qber_indices_in_sifted'] = []
+                        st.session_state.results['remaining_indices_in_sifted'] = []
+
+
+                    if qber is not None and qber > QBER_THRESHOLD:
+                        progress_bar.progress(100, text="Finished - Protocol Aborted (High QBER).")
+                        st.error(f"QBER ({qber:.2%}) exceeded threshold ({QBER_THRESHOLD:.2%}). Protocol Aborted.")
+                        st.session_state.results['protocol_aborted'] = True
+                        st.session_state.results['final_key_str'] = ""
+                        st.session_state.results['final_key_len'] = 0
+                    elif qber is not None:
+                        progress_bar.progress(95, text="Step 7/7: Extracting final key...")
+                        # Final key uses Alice's bits (assuming no error correction implemented)
+                        final_key = qkd_processing.extract_final_key(alice_sifted, remain_idx)
+                        st.session_state.results['final_key_str'] = helpers.bits_to_string(final_key)
+                        st.session_state.results['final_key_len'] = len(final_key)
+                        st.session_state.results['protocol_aborted'] = False
+                        progress_bar.progress(100, text="Finished - Final Key Extracted.")
+                    else: # Case where QBER wasn't calculated
+                        st.session_state.results['protocol_aborted'] = False
+                        st.session_state.results['final_key_str'] = ""
+                        st.session_state.results['final_key_len'] = 0
+                        progress_bar.progress(100, text="Finished - Insufficient bits for QBER/Key.")
+
+
+                    st.session_state.simulation_run_completed = True
+                    st.success(f"Simulation finished successfully on {selected_backend_main}.")
+                    if eve_simulation_active:
+                        st.success("🕵️ Eve's intercept-resend attack was simulated.")
+
+
+            except Exception as e:
+                    st.error(f"Simulation Error: {e}")
+                    st.error(traceback.format_exc()) # Print detailed traceback
+                    st.session_state.simulation_run_completed = False
+                    progress_bar.progress(100, text="Finished - Error Occurred.")
+
+
+        # --- Display Results Table (Conditional) ---
+        st.markdown("---")
+        st.subheader("Results Table")
+        if st.session_state.simulation_run_completed:
+            res = st.session_state.results
+            params = st.session_state.run_params
+            num_display_bits = params['num_bits'] # Length of original run
+
+            # --- Construct DataFrame ---
+            table_data = {
+                'Bit #': list(range(num_display_bits)),
+                'Alice Photon': [""] * num_display_bits,
+                'Alice Basis': [""] * num_display_bits,
+                'Bob Basis': [""] * num_display_bits,
+                'Bob Measurement': [""] * num_display_bits,
+                'Bases Match': [""] * num_display_bits,
+                'Sifted Bit (Alice)': ["-"] * num_display_bits,
+                'Sifted Bit (Bob)': ["-"] * num_display_bits,
+                'Used for QBER': ["-"] * num_display_bits,
+                'Final Key Bit': ["-"] * num_display_bits
+            }
+
+            # Safe access to results with defaults
+            alice_bits = res.get('alice_bits', [])
+            alice_bases = res.get('alice_bases', [])
+            bob_bases = res.get('bob_bases', [])
+            bob_measured_bits = res.get('bob_measured_bits_np', np.array([]))
+            matching_indices = res.get('matching_indices', [])
+            alice_sifted = res.get('alice_sifted', [])
+            bob_sifted = res.get('bob_sifted', [])
+            qber_indices_sifted = res.get('qber_indices_in_sifted', []) # Indices within the *sifted* key
+            remaining_indices_sifted = res.get('remaining_indices_in_sifted', []) # Indices within the *sifted* key
+            protocol_aborted = res.get('protocol_aborted', False)
+
+            sifted_idx_map = {original_idx: sifted_pos for sifted_pos, original_idx in enumerate(matching_indices)}
+
+            for i in range(num_display_bits):
+                # Alice Info
+                if i < len(alice_bits) and i < len(alice_bases):
+                    bit = alice_bits[i]
+                    basis = alice_bases[i]
+                    table_data['Alice Basis'][i] = BASIS_MAP.get(basis, '?')
+                    if basis == 0: table_data['Alice Photon'][i] = QUBIT_MAP_Z.get(bit, '?')
+                    else: table_data['Alice Photon'][i] = QUBIT_MAP_X.get(bit, '?')
+                else:
+                    table_data['Alice Photon'][i] = 'ERR'
+                    table_data['Alice Basis'][i] = 'ERR'
+
+                # Bob Info
+                if i < len(bob_bases):
+                    table_data['Bob Basis'][i] = BASIS_MAP.get(bob_bases[i], '?')
+                else: table_data['Bob Basis'][i] = 'ERR'
+
+                if i < len(bob_measured_bits):
+                    table_data['Bob Measurement'][i] = str(bob_measured_bits[i])
+                else: table_data['Bob Measurement'][i] = 'ERR'
+
+                # Matching and Sifted/Key Info
+                is_match = i in matching_indices
+                table_data['Bases Match'][i] = '✅' if is_match else '❌'
+
+                if is_match:
+                    sifted_pos = sifted_idx_map.get(i)
+                    if sifted_pos is not None and sifted_pos < len(alice_sifted):
+                        table_data['Sifted Bit (Alice)'][i] = str(alice_sifted[sifted_pos])
+                    else: table_data['Sifted Bit (Alice)'][i] = 'ERR'
+
+                    if sifted_pos is not None and sifted_pos < len(bob_sifted):
+                         table_data['Sifted Bit (Bob)'][i] = str(bob_sifted[sifted_pos])
+                    else: table_data['Sifted Bit (Bob)'][i] = 'ERR'
+
+
+                    if res['qber'] is not None: # Only if QBER was calculated
+                        is_qber_bit = sifted_pos in qber_indices_sifted
+                        is_final_key_bit = sifted_pos in remaining_indices_sifted
+
+                        table_data['Used for QBER'][i] = 'Yes' if is_qber_bit else 'No'
+
+                        if not protocol_aborted and is_final_key_bit:
+                             # Find the position within the final key
+                             try:
+                                 final_key_pos = remaining_indices_sifted.index(sifted_pos)
+                                 if final_key_pos < len(res.get('final_key_str', '')):
+                                      table_data['Final Key Bit'][i] = res['final_key_str'][final_key_pos]
+                                 else: table_data['Final Key Bit'][i] = 'ERR'
+                             except ValueError:
+                                 table_data['Final Key Bit'][i] = 'ERR' # Should not happen if logic is correct
+                        elif protocol_aborted:
+                             table_data['Final Key Bit'][i] = '(Aborted)'
+                        elif is_qber_bit:
+                             table_data['Final Key Bit'][i] = '(QBER Sample)'
+                        else:
+                             table_data['Final Key Bit'][i] = '-' # Not used for QBER, not final key
+                    else: # QBER not calculated
+                         table_data['Used for QBER'][i] = 'N/A'
+                         table_data['Final Key Bit'][i] = '(No QBER)'
+
+
+            results_df = pd.DataFrame(table_data)
+            # Display the dataframe, allowing horizontal scrolling if needed
+            st.dataframe(results_df, use_container_width=False) # Set to False to enable scrolling if wide
+
+        elif st.session_state.simulation_started:
+            st.warning("Simulation started but did not complete successfully. Check logs above.")
         else:
-            st.error("❌ Discrepancy! Final keys DO NOT match. Errors remain.")
-            st.markdown("_Note: Error Correction would typically fix this._")
-    else:
-        st.warning("Protocol aborted or no bits remaining. No final key generated.")
+            st.info("Click 'Start Simulation' to configure and run the BB84 protocol.")
 
-else:
-    st.info("Configure parameters in the sidebar and click 'Run QKD Simulation' to start.") # This might be showing instead
+with tab2:
+    st.header("Simulation Statistics")
+    if not SIMULATION_MODULES_AVAILABLE:
+        st.error("Cannot display statistics as core simulation modules failed to load.")
+    elif st.session_state.simulation_run_completed:
+        res = st.session_state.results
+        params = st.session_state.run_params
+
+        st.markdown(f"**Run Parameters:**")
+        # Use st.expander for potentially long JSON
+        with st.expander("View Parameters"):
+            st.json(params)
+
+        st.markdown("---")
+        st.subheader("Key Lengths & Efficiency")
+        initial_bits = params.get('num_bits', 0)
+        sifted_len = len(res.get('alice_sifted', []))
+        final_key_len = res.get('final_key_len', 0) if not res.get('protocol_aborted', True) else 0
+        qber_sample_len = len(res.get('qber_indices_in_sifted', []))
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Initial Qubits", initial_bits)
+        col2.metric("Sifted Key Length", sifted_len)
+        col3.metric("Final Key Length", final_key_len)
+
+        st.metric("QBER Sample Size", qber_sample_len)
+
+        efficiency = (final_key_len / initial_bits) * 100 if initial_bits > 0 else 0
+        st.metric("Overall Key Efficiency", f"{efficiency:.2f}%")
+        st.progress(efficiency / 100)
+
+        st.markdown("---")
+        st.subheader("Error Rate Analysis")
+        if 'qber' in res and res['qber'] is not None:
+            qber_val = res['qber']
+            st.metric(label="Estimated QBER", value=f"{qber_val:.2%}")
+
+            is_simulator = "simulator" in params.get('selected_backend', '').lower()
+            eve_included = params.get('include_eve', False)
+
+            if qber_val == 0.0:
+                if is_simulator and not eve_included:
+                    st.info("💡 QBER is 0%. Expected for a **noiseless simulator** run without Eve.")
+                elif is_simulator and eve_included:
+                    # This case should be less likely now with active simulation
+                    st.warning("💡 QBER is 0% despite simulating Eve's interception. This could happen by chance if Eve guessed all bases correctly, or if the QBER sample happened to miss all errors. Try increasing the number of qubits or the QBER sample fraction.")
+                elif not is_simulator:
+                    st.info("💡 QBER is 0%. Indicates very low noise on the quantum hardware for this run/sample, or the sample chosen for QBER estimation happened to have no errors.")
+            elif qber_val > 0.0:
+                 if is_simulator and eve_included:
+                     st.success(f"💡 QBER is {qber_val:.2%}. This is the **expected outcome** when simulating Eve's intercept-resend attack on the local simulator, as her measurements introduce errors.")
+                 elif is_simulator and not eve_included:
+                     st.warning(f"💡 QBER is {qber_val:.2%}. This is **unexpected** on the ideal local simulator *without* Eve. Check if the simulation code (e.g., `circuits.py`, `runner.py`) intentionally introduces noise or errors.")
+                 elif not is_simulator:
+                     st.info(f"💡 QBER is {qber_val:.2%}. On real hardware, this reflects noise (environmental, gate/measurement errors) and potentially eavesdropping (indistinguishable from noise here).")
+            # --- End Enhanced Explanation ---
+
+
+            if res.get('protocol_aborted', False):
+                st.error(f"Protocol Aborted: QBER ({qber_val:.2%}) likely exceeded threshold ({QBER_THRESHOLD:.2%}). No final key generated.")
+            else:
+                st.success(f"Protocol Successful: QBER ({qber_val:.2%}) is within the acceptable threshold ({QBER_THRESHOLD:.2%}).")
+        else:
+            st.info("QBER was not calculated (e.g., insufficient sifted bits).")
+
+        # Optionally display the final key if generated
+        if not res.get('protocol_aborted', True) and res.get('final_key_str'):
+            st.markdown("---")
+            st.subheader("Generated Final Key")
+            # Use an expander for potentially long keys
+            with st.expander("Show Final Key String"):
+                st.text(res.get('final_key_str', ''))
+        elif res.get('protocol_aborted', False):
+             st.warning("Final key was not generated because the protocol was aborted.")
+        else:
+             st.info("Final key was not generated (likely due to insufficient bits after sifting/QBER).")
+
+
+    else:
+        st.info("Run a simulation on the 'Visualization' tab to see statistics.")
+
+# Add a footer or credits if desired
+st.markdown("---")
+st.caption("BB84 Simulator using Streamlit and Qiskit")

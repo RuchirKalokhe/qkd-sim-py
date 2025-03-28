@@ -1,5 +1,6 @@
 streamlit
 qiskit>=1.0
+qiskit_aer
 qiskit-ibm-runtime
 matplotlib
 numpy
