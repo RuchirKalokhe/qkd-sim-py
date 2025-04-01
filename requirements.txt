@@ -1,7 +1,8 @@
-streamlit
-qiskit>=1.0
-qiskit_aer
-qiskit-ibm-runtime
-matplotlib
-numpy
-# Add other dependencies as needed (e.g., scipy)
+streamlit>=1.28.0
+qiskit>=1.0.0
+qiskit_aer>=0.12.0
+qiskit-ibm-runtime>=0.18.0
+matplotlib>=3.7.0
+numpy>=1.24.0
+pandas>=2.0.0
+typing-extensions>=4.5.0
