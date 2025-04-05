@@ -1,5 +1,0 @@
-include README.md
-include LICENSE
-recursive-include qkd_simulation/images *
-recursive-include docs *
-recursive-include tests *.py
