@@ -6,7 +6,7 @@ An interactive web application that simulates Quantum Key Distribution protocols
 
 ## Overview
 
-This simulator primarily demonstrates the BB84 protocol, the first quantum cryptographic protocol developed by Bennett and Brassard in 1984, with additional support for the E91 protocol. It allows users to:
+This simulator demonstrates the BB84 protocol, the first quantum cryptographic protocol developed by Bennett and Brassard in 1984. It allows users to:
 
 - Generate and exchange quantum keys between two parties (Alice and Bob)
 - Simulate an eavesdropper (Eve) using intercept-resend attacks
@@ -19,9 +19,7 @@ This simulator primarily demonstrates the BB84 protocol, the first quantum crypt
 
 - **Protocol Implementations**: 
   - BB84 protocol (Bennett and Brassard, 1984)
-  - E91 protocol (Ekert, 1991)
 - **Interactive UI**: User-friendly Streamlit interface with tabbed visualization and statistics views
-- **Command Line Interface**: Run simulations and analyze results directly from the terminal
 - **Quantum Backend Options**: 
   - Local simulator using Qiskit Aer
   - IBM Quantum real hardware integration
@@ -98,7 +96,7 @@ pip install -e .
 
 To use IBM Quantum backends:
 
-1. Create an IBM Quantum account at [quantum-computing.ibm.com](https://quantum-computing.ibm.com/)
+1. Create an IBM Quantum account at [quantum.ibm.com](https://quantum.ibm.com/)
 2. Get your API token from the IBM Quantum dashboard
 3. Create a `.streamlit/secrets.toml` file with your token:
    ```toml
@@ -118,24 +116,6 @@ streamlit run app.py
 ```
 
 The application will be available at `http://localhost:8501` in your web browser.
-
-### Command Line Interface
-
-Run simulations directly from the command line:
-
-```bash
-# Run a basic BB84 simulation
-qkd-sim run bb84 --qubits 100
-
-# Run with an eavesdropper
-qkd-sim run bb84 --qubits 100 --eve
-
-# Get detailed statistics
-qkd-sim stats bb84 --qubits 1000 --trials 10 --output stats.json
-
-# Get help
-qkd-sim --help
-```
 
 ### Docker Deployment (Optional)
 
@@ -237,7 +217,7 @@ qkd_sim_py/
 │   └── test_quantum.py         # Quantum simulation tests
 └── qkd_simulation/             # Core simulation package
     ├── __init__.py
-    ├── cli.py                  # Command-line interface
+    ├── cli.py                  # Command-line interface (under development)
     ├── protocols/              # QKD protocol implementations
     │   ├── __init__.py
     │   └── bb84.py             # BB84 protocol implementation
