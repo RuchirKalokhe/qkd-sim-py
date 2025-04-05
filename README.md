@@ -21,6 +21,7 @@ This simulator primarily demonstrates the BB84 protocol, the first quantum crypt
   - BB84 protocol (Bennett and Brassard, 1984)
   - E91 protocol (Ekert, 1991)
 - **Interactive UI**: User-friendly Streamlit interface with tabbed visualization and statistics views
+- **Command Line Interface**: Run simulations and analyze results directly from the terminal
 - **Quantum Backend Options**: 
   - Local simulator using Qiskit Aer
   - IBM Quantum real hardware integration
@@ -37,6 +38,7 @@ This simulator primarily demonstrates the BB84 protocol, the first quantum crypt
   - QBER calculation
   - Protocol efficiency statistics
   - Bit error rate analysis
+  - Performance benchmarking and optimization
 - **Educational Value**: 
   - Step-by-step visualization of quantum states and measurements
   - Circuit visualization capabilities
@@ -76,6 +78,22 @@ This simulator primarily demonstrates the BB84 protocol, the first quantum crypt
    pip install -r requirements.txt
    ```
 
+### Install from PyPI
+
+You can also install the package directly from PyPI:
+
+```bash
+pip install qkd-sim-py
+```
+
+### Development Installation
+
+For development work, install in editable mode:
+
+```bash
+pip install -e .
+```
+
 ### IBM Quantum Integration (Optional)
 
 To use IBM Quantum backends:
@@ -91,7 +109,7 @@ To use IBM Quantum backends:
 
 ## Running the Application
 
-### Local Development
+### Web Interface
 
 Start the Streamlit application:
 
@@ -100,6 +118,24 @@ streamlit run app.py
 ```
 
 The application will be available at `http://localhost:8501` in your web browser.
+
+### Command Line Interface
+
+Run simulations directly from the command line:
+
+```bash
+# Run a basic BB84 simulation
+qkd-sim run bb84 --qubits 100
+
+# Run with an eavesdropper
+qkd-sim run bb84 --qubits 100 --eve
+
+# Get detailed statistics
+qkd-sim stats bb84 --qubits 1000 --trials 10 --output stats.json
+
+# Get help
+qkd-sim --help
+```
 
 ### Docker Deployment (Optional)
 
@@ -154,6 +190,20 @@ from qkd_simulation.quantum.runner import run_circuits_batch
 results = run_circuits_batch(circuits, batch_size=50)
 ```
 
+#### Performance Analysis
+
+Measure and optimize performance of your quantum simulations:
+
+```python
+from qkd_simulation.utils.performance import benchmark_simulation, profile_memory_usage
+
+# Benchmark simulation performance
+timing_results = benchmark_simulation(num_qubits=100, num_trials=10)
+
+# Profile memory usage
+memory_profile = profile_memory_usage(simulation_function, args=(100, True))
+```
+
 #### Error Correction and Privacy Amplification
 
 Apply post-processing techniques to the sifted key:
@@ -174,9 +224,20 @@ final_key = privacy_amplification(corrected_key, security_parameter=0.8)
 qkd_sim_py/
 ├── app.py                      # Main Streamlit application
 ├── requirements.txt            # Python dependencies
+├── setup.py                    # Package setup file
+├── pyproject.toml              # Project configuration
+├── LICENSE.txt                 # License information
+├── MANIFEST.in                 # Package manifest
 ├── images/                     # Images for UI and documentation
+├── docs/                       # Documentation
+│   └── documentation.md        # Detailed documentation
+├── tests/                      # Test suite
+│   ├── run_tests.py            # Test runner
+│   ├── test_core.py            # Core functionality tests
+│   └── test_quantum.py         # Quantum simulation tests
 └── qkd_simulation/             # Core simulation package
     ├── __init__.py
+    ├── cli.py                  # Command-line interface
     ├── protocols/              # QKD protocol implementations
     │   ├── __init__.py
     │   └── bb84.py             # BB84 protocol implementation
@@ -189,7 +250,8 @@ qkd_sim_py/
     │   └── processing.py       # Key sifting, error correction, etc.
     └── utils/                  # Utility functions
         ├── __init__.py
-        └── helpers.py          # Helper functions
+        ├── helpers.py          # Helper functions
+        └── performance.py      # Performance benchmarking tools
 ```
 
 ## Contributing
